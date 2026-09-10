@@ -48,4 +48,6 @@ All settings are in the `environment:` block in `docker-compose.yml`.
 | `GIT_USER_EMAIL` | No | `backup@localhost` | Git commit author email. |
 | `COMMIT_MESSAGE_FORMAT` | No | `backup: {router_name} config updated at {timestamp}` | Supports `{router_name}` and `{timestamp}`. |
 | `LISTEN_PORT` | No | `8080` | Also update the `ports:` mapping if you change this. |
+| `GIT_TIMEOUT` | No | `120` | Seconds before a hung git command (clone/push) is killed. |
+| `SHUTDOWN_TIMEOUT` | No | `5` | Seconds in-flight uploads get to finish on `docker compose stop`. |
 

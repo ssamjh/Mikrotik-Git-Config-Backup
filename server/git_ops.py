@@ -14,6 +14,24 @@ logger = logging.getLogger(__name__)
 
 REPO_PATH = Path("/data/repo")
 
+# Hard cap on any git invocation. A network hang (unreachable remote, hung TLS
+# handshake) would otherwise pin a worker thread and delay container shutdown.
+GIT_TIMEOUT = int(os.environ.get("GIT_TIMEOUT", "120"))
+
+
+def _git_env() -> dict:
+    env = os.environ.copy()
+    # Never let git block on an interactive credential/passphrase prompt.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    return env
+
+
+def _redact(text: str) -> str:
+    """Strip the PAT out of anything that might be logged or raised."""
+    pat = os.environ.get("GIT_PAT", "")
+    return text.replace(pat, "***") if pat else text
+
 
 def _run(
     cmd: list[str],
@@ -24,9 +42,10 @@ def _run(
     result = subprocess.run(
         cmd,
         cwd=REPO_PATH if use_repo_cwd else None,
-        env=os.environ.copy(),
+        env=_git_env(),
         capture_output=True,
         text=True,
+        timeout=GIT_TIMEOUT,
     )
     if check and result.returncode != 0:
         raise RuntimeError(
@@ -71,9 +90,10 @@ def initialise_repo():
     logger.info("Attempting to clone %s ...", repo_url)
     clone_result = subprocess.run(
         ["git", "clone", "--branch", branch, _authenticated_url(repo_url), str(REPO_PATH)],
-        env=os.environ.copy(),
+        env=_git_env(),
         capture_output=True,
         text=True,
+        timeout=GIT_TIMEOUT,
     )
 
     if clone_result.returncode == 0:
@@ -85,7 +105,7 @@ def initialise_repo():
     logger.warning(
         "Clone failed (rc=%d): %s — initialising empty local repo instead",
         clone_result.returncode,
-        clone_result.stderr.strip(),
+        _redact(clone_result.stderr.strip()),
     )
     subprocess.run(["git", "init", "-b", branch, str(REPO_PATH)], check=True, capture_output=True)
     _run(["git", "remote", "add", "origin", repo_url])
@@ -117,11 +137,9 @@ def commit_and_push(router_name: str, file_label: str) -> bool:
     branch = os.environ.get("GIT_BRANCH", "main")
     repo_url = os.environ.get("GIT_REPO_URL", "")
 
-    _run(["git", "remote", "set-url", "origin", _authenticated_url(repo_url)])
-    try:
-        _run(["git", "push", "origin", branch])
-        logger.info("Pushed to origin/%s", branch)
-    finally:
-        _run(["git", "remote", "set-url", "origin", repo_url])
+    # Push to the authenticated URL directly instead of rewriting the remote:
+    # the PAT stays in this process's argv and never lands in .git/config.
+    _run(["git", "push", _authenticated_url(repo_url), f"HEAD:{branch}"])
+    logger.info("Pushed to origin/%s", branch)
 
     return True

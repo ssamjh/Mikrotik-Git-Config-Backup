@@ -2,6 +2,11 @@ services:
   backup-server:
     build: ./server
     restart: unless-stopped
+    # PID 1 reaper — reaps the git child processes and forwards SIGTERM cleanly.
+    init: true
+    # Bounded stop: uvicorn drains in ~5s, so 15s is a generous ceiling before
+    # Docker resorts to SIGKILL.
+    stop_grace_period: 15s
     ports:
       - "8080:8080"
     environment:

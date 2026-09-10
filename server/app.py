@@ -5,6 +5,7 @@ Receives router config files via POST, diffs against the previous version,
 and commits + pushes any changes to a git repository.
 """
 
+import asyncio
 import hmac
 import logging
 import os
@@ -76,10 +77,13 @@ async def lifespan(app: FastAPI):
     # Uvicorn configures its loggers during startup, so the filter must be
     # added here — after uvicorn is ready — not at module import time.
     logging.getLogger("uvicorn.access").addFilter(_SuppressHealthLogs())
+    # Fail fast on a misconfigured token rather than on the first router POST.
+    _get_required_env("ROUTER_AUTH_TOKEN")
     logger.info("Initialising git repository ...")
     initialise_repo()
     logger.info("Repository ready. Server starting.")
     yield
+    logger.info("Shutting down.")
 
 
 app = FastAPI(
@@ -119,9 +123,15 @@ async def backup_config(request: Request):
     body = _strip_rsc_header(body)
     dest = REPO_PATH / f"{router_name}.rsc"
 
-    with _git_lock:
-        dest.write_bytes(body)
-        committed = commit_and_push(router_name=router_name, file_label="config")
+    def _write_and_commit() -> bool:
+        with _git_lock:
+            dest.write_bytes(body)
+            return commit_and_push(router_name=router_name, file_label="config")
+
+    # git talks to the network and can block for as long as GIT_TIMEOUT; running
+    # it on a worker thread keeps the event loop (and /health, and shutdown)
+    # responsive.
+    committed = await asyncio.to_thread(_write_and_commit)
 
     if committed:
         logger.info("Config change committed for router %r", router_name)
@@ -135,4 +145,15 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("LISTEN_PORT", "8080"))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(
+        "app:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        # On SIGTERM, stop accepting connections and give in-flight uploads a
+        # few seconds to finish. Without this, uvicorn waits indefinitely and
+        # `docker compose down` sits until it gives up and SIGKILLs.
+        timeout_graceful_shutdown=int(os.environ.get("SHUTDOWN_TIMEOUT", "5")),
+        # Don't hold the process open on idle keep-alive connections.
+        timeout_keep_alive=15,
+    )
