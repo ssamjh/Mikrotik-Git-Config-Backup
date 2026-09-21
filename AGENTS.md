@@ -1,5 +1,11 @@
 # AGENTS.md
 
+## Model routing
+
+- You own planning, architecture, and final verification. Don't write bulk code yourself.
+- Break work into independent, clearly scoped tasks with success criteria and hand each to a subagent.
+- Review subagent output before reporting done.
+
 ## Project purpose
 
 This repository runs a small Dockerized FastAPI service that receives MikroTik
@@ -17,9 +23,22 @@ files as sensitive infrastructure data.
 - `server/Dockerfile` — production image containing Python and Git.
 - `docker-compose.yml` — service configuration, environment variables, health
   check, port mapping, and the persistent `./repo_data` mount.
-- `router-scripts/mikrotik-backup.rsc` — RouterOS script that checks health,
-  exports sensitive configuration, and uploads it to the service.
+- `router-scripts/mikrotik-backup.rsc` — RouterOS health check, sensitive export,
+  upload, and temporary-file cleanup script. Treat it as sensitive integration
+  code.
 - `README.md` — operator setup and configuration documentation.
+
+## Architecture and data flow
+
+- On startup, `server/app.py` validates `ROUTER_AUTH_TOKEN` and calls
+  `initialise_repo()` to clone or initialize `/data/repo`.
+- `GET /health` is the liveness endpoint used by the Compose healthcheck.
+- `POST /backup/config` requires a bearer token, accepts the raw RSC body, reads
+  `X-Router-Name`, removes the changing leading RouterOS comment header, and
+  writes `<router_name>.rsc` into `/data/repo`.
+- Blocking Git work runs through `asyncio.to_thread` under one lock. A changed
+  file is staged, committed, and pushed; an unchanged upload returns HTTP 204,
+  while a committed upload returns HTTP 200 with `{"committed": true}`.
 
 ## Working agreement
 
@@ -57,6 +76,14 @@ docker compose logs --tail 100 backup-server
 # Stop the local integration environment
 docker compose down
 ```
+
+Configure the `environment` block in `docker-compose.yml`. The required values
+are `ROUTER_AUTH_TOKEN`, `GIT_REPO_URL`, and `GIT_PAT`; optional values include
+`GIT_BRANCH`, Git author identity, `COMMIT_MESSAGE_FORMAT`, `LISTEN_PORT`,
+`GIT_TIMEOUT`, and `SHUTDOWN_TIMEOUT`. If `LISTEN_PORT` changes, update the
+Compose `ports` mapping too. Replace `serverUrl` and `authToken` in the
+RouterOS script, test it with `/system script run git-backup`, then schedule it
+under RouterOS System → Scheduler.
 
 There is currently no automated test, lint, or type-check configuration. For
 changes to request handling or Git behavior, at minimum run the syntax check
