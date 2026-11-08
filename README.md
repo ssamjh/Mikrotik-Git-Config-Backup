@@ -34,6 +34,19 @@ Edit the three variables at the top of `router-scripts/mikrotik-backup.rsc` and 
 
 ---
 
+## Development
+
+The server in `server/` is managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`, Python 3.14). Run it locally from that folder with the same environment variables as below; it also needs `git` on your `PATH`:
+
+```bash
+cd server
+uv run app.py
+```
+
+uv creates `.venv` and installs the locked dependencies on first run. Use `uv add` / `uv remove` to change dependencies and commit the updated `uv.lock`; the Docker image installs from the same lockfile.
+
+---
+
 ## Configuration
 
 All settings are in the `environment:` block in `docker-compose.yml`.
